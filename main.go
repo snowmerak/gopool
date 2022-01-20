@@ -10,6 +10,7 @@ import (
 var pool = sync.Pool{}
 var count = int64(0)
 var max = int64(2 << 40)
+var logger *log.Logger
 
 func init() {
 	pool.New = func() interface{} {
@@ -19,7 +20,7 @@ func init() {
 			defer func() {
 				r := recover()
 				if r != nil {
-					log.Println(r)
+					logger.Println(r)
 				}
 				atomic.AddInt64(&count, -1)
 			}()
@@ -46,6 +47,10 @@ func GetMax() int64 {
 
 func GetCurrnet() int64 {
 	return atomic.LoadInt64(&count)
+}
+
+func SetLogger(l *log.Logger) {
+	logger = l
 }
 
 func Go(f func()) {
