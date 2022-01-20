@@ -11,31 +11,45 @@ go get github.com/snowmerak/gopool
 ```go
 package main
 
-import "github.com/snowmerak/gopool"
+import (
+	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"time"
+
+	"github.com/snowmerak/gopool"
+)
 
 func main() {
-    // set logger of gopool
-    gopool.SetLogger(log.New(os.Stdout, "gopool: ", log.LstdFlags))
+	// create new logger
+	logger := log.New(os.Stderr, "gopool: ", log.LstdFlags)
 
-    // Set max goroutine counts
-	gopool.SetMax(100)
-	wg := sync.WaitGroup{}
+	// create new gopool with max size
+	gp := gopool.New(200)
+	s := time.Now()
 	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		gopool.Go(func() {
-			time.Sleep(time.Second)
-			wg.Done()
+		// execute function through goroutine
+		gp.Go(func() interface{} {
+			time.Sleep(time.Millisecond * 100)
+			return nil
 		})
 	}
-	for i := 0; i < 5; i++ {
-        // can recover panic
-		gopool.Go(func() {
-			panic("any error")
-		})
-	}
-	wg.Wait()
 
-    // print current goroutines
-	fmt.Println(gopool.GetCurrnet())
+	// wait gopool's all goroutines are stopped
+	gp.Wait()
+	e := time.Now()
+	fmt.Println(e.Sub(s))
+
+	// print current goroutine number
+	fmt.Println(gp.GetCurrnet())
+
+	// return panic value
+	// can receive function's returning value
+	ret := gp.Go(func() interface{} {
+		panic("test")
+	})
+	logger.Println(<-ret)
 }
+
 ```
