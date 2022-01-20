@@ -1,62 +1,84 @@
 package gopool
 
 import (
-	"log"
 	"runtime"
 	"sync"
 	"sync/atomic"
 )
 
-var pool = sync.Pool{}
-var count = int64(0)
-var max = int64(2 << 40)
-var logger *log.Logger
+type GoPool struct {
+	pool    sync.Pool
+	max     int64
+	count   int64
+	running int64
+}
 
-func init() {
-	pool.New = func() interface{} {
-		ch := make(chan func(), 1)
-		atomic.AddInt64(&count, 1)
+type parameter struct {
+	f  func() interface{}
+	ch chan<- interface{}
+}
+
+func New(max int64) *GoPool {
+	gp := &GoPool{}
+	gp.pool.New = func() interface{} {
+		ch := make(chan parameter, 1)
+		atomic.AddInt64(&gp.count, 1)
 		go func() {
+			param := parameter{}
 			defer func() {
 				r := recover()
-				if r != nil {
-					logger.Println(r)
-				}
-				atomic.AddInt64(&count, -1)
+				param.ch <- r
+				atomic.AddInt64(&gp.count, -1)
+				atomic.AddInt64(&gp.running, -1)
 			}()
-			for f := range ch {
-				f()
-				if atomic.LoadInt64(&count) > atomic.LoadInt64(&max) {
+			for p := range ch {
+				param = p
+				rs := p.f()
+				if atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&max) {
 					close(ch)
 					return
 				}
-				pool.Put(ch)
+				p.ch <- rs
+				close(p.ch)
+				gp.pool.Put(ch)
+				atomic.AddInt64(&gp.running, -1)
 			}
 		}()
 		return ch
 	}
+	gp.max = max
+	gp.count = 0
+	return gp
 }
 
-func SetMax(n int64) {
-	atomic.StoreInt64(&max, n)
+func (gp *GoPool) SetMax(n int64) {
+	atomic.StoreInt64(&gp.max, n)
 }
 
-func GetMax() int64 {
-	return atomic.LoadInt64(&max)
+func (gp *GoPool) GetMax() int64 {
+	return atomic.LoadInt64(&gp.max)
 }
 
-func GetCurrnet() int64 {
-	return atomic.LoadInt64(&count)
+func (gp *GoPool) GetCurrnet() int64 {
+	return atomic.LoadInt64(&gp.count)
 }
 
-func SetLogger(l *log.Logger) {
-	logger = l
-}
-
-func Go(f func()) {
-	for atomic.LoadInt64(&count) > atomic.LoadInt64(&max) {
+func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
+	for atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&gp.max) {
 		runtime.Gosched()
 	}
-	ch := pool.Get().(chan func())
-	ch <- f
+	atomic.AddInt64(&gp.running, 1)
+	ch := gp.pool.Get().(chan parameter)
+	rs := make(chan interface{}, 1)
+	ch <- parameter{
+		f:  f,
+		ch: rs,
+	}
+	return rs
+}
+
+func (gp *GoPool) Wait() {
+	for atomic.LoadInt64(&gp.running) > 0 {
+		runtime.Gosched()
+	}
 }
