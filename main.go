@@ -24,6 +24,7 @@ func New(max int64) *GoPool {
 		ch := make(chan parameter, 1)
 		atomic.AddInt64(&gp.count, 1)
 		go func() {
+			defer close(ch)
 			param := parameter{}
 			defer func() {
 				r := recover()
@@ -34,8 +35,7 @@ func New(max int64) *GoPool {
 			for p := range ch {
 				param = p
 				rs := p.f()
-				if atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&max) {
-					close(ch)
+				if atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&gp.max) {
 					return
 				}
 				p.ch <- rs
