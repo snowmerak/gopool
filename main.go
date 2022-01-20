@@ -11,6 +11,7 @@ type GoPool struct {
 	max     int64
 	count   int64
 	running int64
+	sync.Mutex
 }
 
 type parameter struct {
@@ -35,9 +36,12 @@ func New(max int64) *GoPool {
 			for p := range ch {
 				param = p
 				rs := p.f()
-				if atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&gp.max) {
+				gp.Lock()
+				if gp.count > gp.max {
+					gp.Unlock()
 					return
 				}
+				gp.Unlock()
 				p.ch <- rs
 				close(p.ch)
 				gp.pool.Put(ch)
@@ -64,7 +68,13 @@ func (gp *GoPool) GetCurrnet() int64 {
 }
 
 func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
-	for atomic.LoadInt64(&gp.count) > atomic.LoadInt64(&gp.max) {
+	for {
+		gp.Lock()
+		if gp.running < gp.max {
+			gp.Unlock()
+			break
+		}
+		gp.Unlock()
 		runtime.Gosched()
 	}
 	atomic.AddInt64(&gp.running, 1)
