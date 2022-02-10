@@ -74,8 +74,8 @@ func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
 			runtime.Gosched()
 			continue
 		}
-		swaped := atomic.CompareAndSwapInt64(&gp.running, running, running+1)
-		if swaped {
+		swapped := atomic.CompareAndSwapInt64(&gp.running, running, running+1)
+		if swapped {
 			break
 		}
 	}
