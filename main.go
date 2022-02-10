@@ -2,16 +2,29 @@ package gopool
 
 import (
 	"runtime"
-	"sync"
 	"sync/atomic"
 )
 
+type lock int64
+
+func (l *lock) Lock() {
+	for {
+		if atomic.CompareAndSwapInt64((*int64)(l), 0, 1) {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+func (l *lock) Unlock() {
+	atomic.StoreInt64((*int64)(l), 0)
+}
+
 type GoPool struct {
-	pool    sync.Pool
-	max     int64
-	count   int64
-	running int64
-	sync.Mutex
+	list      []chan parameter
+	isRunning []bool
+	running   int64
+	lock
 }
 
 type parameter struct {
@@ -19,77 +32,72 @@ type parameter struct {
 	ch chan<- interface{}
 }
 
-func New(max int64) *GoPool {
-	gp := &GoPool{}
-	gp.pool.New = func() interface{} {
-		ch := make(chan parameter, 1)
-		atomic.AddInt64(&gp.count, 1)
-		go func() {
-			defer close(ch)
-			param := parameter{}
-			defer func() {
-				r := recover()
-				param.ch <- r
-				atomic.AddInt64(&gp.count, -1)
-				atomic.AddInt64(&gp.running, -1)
-			}()
-			for p := range ch {
-				param = p
-				rs := p.f()
-				gp.Lock()
-				if gp.count > gp.max {
-					gp.Unlock()
-					return
-				}
-				gp.Unlock()
-				p.ch <- rs
-				close(p.ch)
-				gp.pool.Put(ch)
-				atomic.AddInt64(&gp.running, -1)
+func do(gp *GoPool, ch chan parameter, index int) {
+	var resultChan chan<- interface{}
+	defer func() {
+		if err := recover(); err != nil {
+			if resultChan != nil {
+				resultChan <- err
 			}
-		}()
-		return ch
+		}
+		gp.Lock()
+		gp.running--
+		gp.isRunning[index] = false
+		gp.Unlock()
+		go do(gp, ch, index)
+	}()
+	for p := range ch {
+		resultChan = p.ch
+		rs := p.f()
+		p.ch <- rs
+		gp.Lock()
+		gp.running--
+		gp.isRunning[index] = false
+		gp.Unlock()
 	}
-	gp.max = max
-	gp.count = 0
+}
+
+func New(max int) *GoPool {
+	gp := new(GoPool)
+	gp.list = make([]chan parameter, max)
+	for i := 0; i < max; i++ {
+		gp.list[i] = make(chan parameter)
+		go do(gp, gp.list[i], i)
+	}
+	gp.isRunning = make([]bool, max)
+	gp.running = 0
+	gp.lock = 0
 	return gp
 }
 
-func (gp *GoPool) SetMax(n int64) {
-	atomic.StoreInt64(&gp.max, n)
-}
-
-func (gp *GoPool) GetMax() int64 {
-	return atomic.LoadInt64(&gp.max)
-}
-
-func (gp *GoPool) GetCurrent() int64 {
-	return atomic.LoadInt64(&gp.count)
-}
-
-func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
+func (gp *GoPool) Go(f func() interface{}) (<-chan interface{}, error) {
 	for {
-		running := atomic.LoadInt64(&gp.running)
-		if running >= gp.max {
-			runtime.Gosched()
-			continue
+		gp.Lock()
+		for i := 0; i < len(gp.list); i++ {
+			if !gp.isRunning[i] {
+				gp.isRunning[i] = true
+				resultChan := make(chan interface{}, 1)
+				gp.list[i] <- parameter{f, resultChan}
+				gp.running++
+				gp.Unlock()
+				return resultChan, nil
+			}
 		}
-		swapped := atomic.CompareAndSwapInt64(&gp.running, running, running+1)
-		if swapped {
-			break
-		}
+		gp.Unlock()
+		runtime.Gosched()
 	}
-	ch := gp.pool.Get().(chan parameter)
-	rs := make(chan interface{}, 1)
-	ch <- parameter{
-		f:  f,
-		ch: rs,
-	}
-	return rs
 }
 
 func (gp *GoPool) Wait() {
 	for atomic.LoadInt64(&gp.running) > 0 {
 		runtime.Gosched()
+	}
+}
+
+func (gp *GoPool) Close() {
+	gp.Lock()
+	defer gp.Unlock()
+	for i := 0; i < len(gp.list); i++ {
+		close(gp.list[i])
 	}
 }
