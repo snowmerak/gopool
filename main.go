@@ -63,7 +63,7 @@ func (gp *GoPool) GetMax() int64 {
 	return atomic.LoadInt64(&gp.max)
 }
 
-func (gp *GoPool) GetCurrnet() int64 {
+func (gp *GoPool) GetCurrent() int64 {
 	return atomic.LoadInt64(&gp.count)
 }
 
