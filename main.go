@@ -69,15 +69,16 @@ func (gp *GoPool) GetCurrent() int64 {
 
 func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
 	for {
-		gp.Lock()
-		if gp.running < gp.max {
-			gp.Unlock()
+		running := atomic.LoadInt64(&gp.running)
+		if running >= gp.max {
+			runtime.Gosched()
+			continue
+		}
+		swaped := atomic.CompareAndSwapInt64(&gp.running, running, running+1)
+		if swaped {
 			break
 		}
-		gp.Unlock()
-		runtime.Gosched()
 	}
-	atomic.AddInt64(&gp.running, 1)
 	ch := gp.pool.Get().(chan parameter)
 	rs := make(chan interface{}, 1)
 	ch <- parameter{
