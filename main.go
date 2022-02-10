@@ -63,21 +63,22 @@ func (gp *GoPool) GetMax() int64 {
 	return atomic.LoadInt64(&gp.max)
 }
 
-func (gp *GoPool) GetCurrnet() int64 {
+func (gp *GoPool) GetCurrent() int64 {
 	return atomic.LoadInt64(&gp.count)
 }
 
 func (gp *GoPool) Go(f func() interface{}) <-chan interface{} {
 	for {
-		gp.Lock()
-		if gp.running < gp.max {
-			gp.Unlock()
+		running := atomic.LoadInt64(&gp.running)
+		if running >= gp.max {
+			runtime.Gosched()
+			continue
+		}
+		swapped := atomic.CompareAndSwapInt64(&gp.running, running, running+1)
+		if swapped {
 			break
 		}
-		gp.Unlock()
-		runtime.Gosched()
 	}
-	atomic.AddInt64(&gp.running, 1)
 	ch := gp.pool.Get().(chan parameter)
 	rs := make(chan interface{}, 1)
 	ch <- parameter{
