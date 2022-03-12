@@ -9,7 +9,7 @@ gopool은 간단한 고루틴 풀입니다.
 다음 명령어를 프로젝트 루트 폴더에서 실행해주면 프로젝트에 의존성이 추가됩니다.
 
 ```bash
-go get github.com/snowmerak/gopool
+go get github.com/snowmerak/gopool/v2
 ```
 
 ### gopool 선언
