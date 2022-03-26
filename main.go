@@ -20,24 +20,30 @@ func (l *lock) Unlock() {
 	atomic.StoreInt64((*int64)(l), 0)
 }
 
-type GoPool struct {
-	list      []chan parameter
+type GoPool[T any] struct {
+	list      []chan parameter[T]
 	isRunning []bool
 	running   int64
 	lock
 }
 
-type parameter struct {
-	f  func() interface{}
-	ch chan<- interface{}
+type Result[T any] struct {
+	Result T
+	Err    error
 }
 
-func do(gp *GoPool, ch chan parameter, index int) {
-	var resultChan chan<- interface{}
+type parameter[T any] struct {
+	f  func() Result[T]
+	ch chan<- Result[T]
+}
+
+func do[T any](gp *GoPool[T], ch chan parameter[T], index int) {
+	var resultChan chan<- Result[T]
 	defer func() {
 		if err := recover(); err != nil {
 			if resultChan != nil {
-				resultChan <- err
+				var t T
+				resultChan <- Result[T]{t, err.(error)}
 			}
 		}
 		gp.Lock()
@@ -57,11 +63,11 @@ func do(gp *GoPool, ch chan parameter, index int) {
 	}
 }
 
-func New(max int) *GoPool {
-	gp := new(GoPool)
-	gp.list = make([]chan parameter, max)
+func New[T any](max int) *GoPool[T] {
+	gp := new(GoPool[T])
+	gp.list = make([]chan parameter[T], max)
 	for i := 0; i < max; i++ {
-		gp.list[i] = make(chan parameter)
+		gp.list[i] = make(chan parameter[T])
 		go do(gp, gp.list[i], i)
 	}
 	gp.isRunning = make([]bool, max)
@@ -70,14 +76,14 @@ func New(max int) *GoPool {
 	return gp
 }
 
-func (gp *GoPool) Go(f func() interface{}) (<-chan interface{}, error) {
+func (gp *GoPool[T]) Go(f func() Result[T]) (<-chan Result[T], error) {
 	for {
 		gp.Lock()
 		for i := 0; i < len(gp.list); i++ {
 			if !gp.isRunning[i] {
 				gp.isRunning[i] = true
-				resultChan := make(chan interface{}, 1)
-				gp.list[i] <- parameter{f, resultChan}
+				resultChan := make(chan Result[T], 1)
+				gp.list[i] <- parameter[T]{f, resultChan}
 				gp.running++
 				gp.Unlock()
 				return resultChan, nil
@@ -88,13 +94,13 @@ func (gp *GoPool) Go(f func() interface{}) (<-chan interface{}, error) {
 	}
 }
 
-func (gp *GoPool) Wait() {
+func (gp *GoPool[T]) Wait() {
 	for atomic.LoadInt64(&gp.running) > 0 {
 		runtime.Gosched()
 	}
 }
 
-func (gp *GoPool) Close() {
+func (gp *GoPool[T]) Close() {
 	gp.Lock()
 	defer gp.Unlock()
 	for i := 0; i < len(gp.list); i++ {
